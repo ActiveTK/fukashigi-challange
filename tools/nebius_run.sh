@@ -18,7 +18,9 @@ BUDGET=${BUDGET:?usd}
 START_WAIT=${START_WAIT:-900}
 EVERY=${EVERY:-60}
 GUARD_STALL=${GUARD_STALL:-3000}
-MAX_RESTARTS=${MAX_RESTARTS:-20}
+MAX_RESTARTS=${MAX_RESTARTS:-40}
+COOL=${COOL:-1800}
+COOL_AFTER=${COOL_AFTER:-3}
 MAX_ERRORS=${MAX_ERRORS:-2}
 NOPROG=${NOPROG:-2400}
 ALIVE=${ALIVE:-1200}
@@ -96,6 +98,8 @@ harvest() { RUSER=fk KEY="$KEY" ONCE=1 tools/harvest.sh "$IP" 22 "$RDIR/res.txt"
 done_local() { grep -q '^# check' "$LRES" 2>/dev/null; }
 trap 'log "interrupted"; delete_vm; exit 130' INT TERM
 restarts=0
+rsp=${RSP0:-0}
+cool_until=0
 errors=0
 up_since=0
 touch "$LRES"
@@ -138,7 +142,7 @@ while true; do
       [ "$IP" != "-" ] && LASTIP=$IP
       if [ "$up_since" = 0 ]; then up_since=$(date +%s); prog_t=$up_since; fi
       n_now=$(grep -c '^residue ' "$LRES" 2>/dev/null)
-      if [ "$n_now" -gt "$prog_n" ]; then prog_n=$n_now; prog_t=$(date +%s); errors=0; fi
+      if [ "$n_now" -gt "$prog_n" ]; then prog_n=$n_now; prog_t=$(date +%s); errors=0; rsp=0; fi
       if [ $(( $(date +%s) - prog_t )) -gt "$NOPROG" ]; then
         log "no new residue for over ${NOPROG}s, stopping"
         delete_vm
@@ -155,7 +159,17 @@ while true; do
         sleep 15
         continue
       fi
+      if [ "$rsp" -ge "$COOL_AFTER" ] && [ "$cool_until" = 0 ]; then
+        cool_until=$(( $(date +%s) + COOL ))
+        log "stopped $rsp times without progress, waiting ${COOL}s before starting"
+      fi
+      if [ "$cool_until" != 0 ]; then
+        if [ "$(date +%s)" -lt "$cool_until" ]; then sleep "$EVERY"; continue; fi
+        cool_until=0
+        rsp=0
+      fi
       restarts=$((restarts + 1))
+      rsp=$((rsp + 1))
       if [ "$restarts" -gt "$MAX_RESTARTS" ]; then
         log "too many restarts"
         delete_vm
