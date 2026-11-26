@@ -10,7 +10,8 @@ dir=${RDIR:-/root/fk}
 bin=${BIN:-build/fukashigi-gpu}
 opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
 if [ -s "$lres" ]; then
-  timeout 30 scp -i "$key" -P "$port" "${opts[@]}" "$lres" "$ruser@$host:$dir/res.txt" || exit 1
+  timeout 30 scp -i "$key" -P "$port" "${opts[@]}" "$lres" "$ruser@$host:$dir/res.up" || exit 1
+  timeout 30 ssh -i "$key" -p "$port" "${opts[@]}" "$ruser@$host" "cd $dir && if [ ! -s res.txt ] || [ \$(grep -c '^residue ' res.up) -gt \$(grep -c '^residue ' res.txt) ]; then mv res.up res.txt; else rm -f res.up; fi" || exit 1
 fi
 args=$(printf '%q ' "$@")
 timeout 30 ssh -i "$key" -p "$port" "${opts[@]}" "$ruser@$host" "cd $dir && touch res.txt && nohup flock -n run.lock $bin $args --resume res.txt -o res.txt >> run.log 2>&1 < /dev/null & echo started \$!"

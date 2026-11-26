@@ -101,6 +101,8 @@ up_since=0
 touch "$LRES"
 prog_n=$(grep -c '^residue ' "$LRES")
 prog_t=0
+pend_since=0
+LASTIP=""
 last_tick=$(date +%s)
 running=0
 touch "$LRES"
@@ -128,12 +130,15 @@ while true; do
     begin=$(date +%s)
   fi
   read -r ST IP < <(vm_state "$VM")
+  if [ "$ST" = "?" ] && [ -n "$LASTIP" ]; then ST=UNKNOWN; IP=$LASTIP; fi
   case "$ST" in
-    RUNNING)
+    RUNNING|UNKNOWN)
       running=1
+      pend_since=0
+      [ "$IP" != "-" ] && LASTIP=$IP
       if [ "$up_since" = 0 ]; then up_since=$(date +%s); prog_t=$up_since; fi
       n_now=$(grep -c '^residue ' "$LRES" 2>/dev/null)
-      if [ "$n_now" -gt "$prog_n" ]; then prog_n=$n_now; prog_t=$(date +%s); fi
+      if [ "$n_now" -gt "$prog_n" ]; then prog_n=$n_now; prog_t=$(date +%s); errors=0; fi
       if [ $(( $(date +%s) - prog_t )) -gt "$NOPROG" ]; then
         log "no new residue for over ${NOPROG}s, stopping"
         delete_vm
@@ -144,6 +149,8 @@ while true; do
     STOPPED)
       running=0
       up_since=0
+      pend_since=0
+      LASTIP=""
       if [ $(( $(date +%s) - ${begin:-0} )) -lt 180 ]; then
         sleep 15
         continue
@@ -163,10 +170,13 @@ while true; do
     *)
       running=1
       up_since=0
-      if [ $(( $(date +%s) - ${begin:-$now} )) -gt "$START_WAIT" ]; then
+      [ "$pend_since" = 0 ] && pend_since=$(date +%s)
+      if [ $(( $(date +%s) - pend_since )) -gt "$START_WAIT" ]; then
         log "state $ST for over ${START_WAIT}s, deleting to retry later"
         delete_vm
         running=0
+        pend_since=0
+        LASTIP=""
         sleep 300
       else
         sleep 15
