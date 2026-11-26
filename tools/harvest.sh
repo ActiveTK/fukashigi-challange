@@ -10,13 +10,14 @@ ruser=${RUSER:-root}
 every=${EVERY:-60}
 stall=${STALL:-1800}
 maxfail=${MAXFAIL:-5}
+once=${ONCE:-0}
 opts=(-i "$key" -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
 touch "$lres"
 count() { grep -c '^residue ' "$1" 2>/dev/null; }
 last=$(count "$lres")
 since=$(date +%s)
 fails=0
-echo "watch $host:$port local=$lres residues=$last"
+[ "$once" = 1 ] || echo "watch $host:$port local=$lres residues=$last"
 while true; do
   if snap=$(timeout 30 ssh "${opts[@]}" "$ruser@$host" "cat '$rres' 2>/dev/null; echo '#--log'; tail -n 5 '$rlog' 2>/dev/null"); then
     fails=0
@@ -26,7 +27,7 @@ while true; do
     {
       [ -n "$head" ] && echo "$head"
       { grep '^residue ' "$lres"; printf '%s\n' "$res" | grep '^residue '; } | sort -u
-      printf '%s\n' "$res" | grep -E '^# (answer|check)'
+      { grep -v '^# fukashigi' "$lres" | grep -v '^residue '; printf '%s\n' "$res" | grep -v '^# fukashigi' | grep -v '^residue '; } | grep -v '^$' | sort -u
     } > "$lres.tmp" && mv "$lres.tmp" "$lres"
     n=$(count "$lres")
     now=$(date +%s)
@@ -44,6 +45,7 @@ while true; do
       echo "error $bad"
       exit 4
     fi
+    [ "$once" = 1 ] && exit 10
     if [ $((now - since)) -ge "$stall" ]; then
       echo "stall $((now - since))s total $n"
       since=$now
@@ -51,6 +53,7 @@ while true; do
   else
     fails=$((fails + 1))
     echo "sshfail $fails"
+    [ "$once" = 1 ] && exit 3
     if [ "$fails" -ge "$maxfail" ]; then
       echo "lost"
       exit 3
