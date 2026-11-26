@@ -7,6 +7,8 @@ SUB=${SUB:?subnet id}
 PP=${PP:?pricing policy id}
 LIMIT=${LIMIT:-780}
 IMAGE=${IMAGE:-ubuntu24.04-kernel-7.0-nvidia580-x86_64}
+PROBE=${PROBE:-tests/gpu_probe8.sh}
+HARVEST=${HARVEST:-1}
 KEY=$HOME/.ssh/nebius_fk
 OUT=build/nebius
 NAME=fk-bench-$(date +%s)
@@ -92,10 +94,10 @@ log "ssh ready after $(( $(date +%s) - T0 ))s"
 timeout 60 scp "${SSHO[@]}" build/kit.tgz "fk@$IP:kit.tgz" || { log "upload failed"; exit 1; }
 REM=$(( LIMIT - ( $(date +%s) - T0 ) - 60 ))
 log "probe budget ${REM}s"
-timeout "$REM" ssh "${SSHO[@]}" "fk@$IP" "mkdir -p fk && tar -C fk -xzf kit.tgz && cd fk && bash tests/gpu_probe8.sh" 2>&1 | tee "$OUT/probe.log"
+timeout "$REM" ssh "${SSHO[@]}" "fk@$IP" "mkdir -p fk && tar -C fk -xzf kit.tgz && cd fk && bash $PROBE" 2>&1 | tee "$OUT/probe.log"
 log "probe finished after $(( $(date +%s) - T0 ))s"
 REM=$(( LIMIT - ( $(date +%s) - T0 ) - 60 ))
-if [ "$REM" -gt 120 ]; then
+if [ "$HARVEST" = 1 ] && [ "$REM" -gt 120 ]; then
   rm -f "$OUT/h.res"
   RUSER=fk RDIR=/home/fk/fk KEY="$KEY" timeout 40 tools/remote_run.sh "$IP" 22 "$OUT/h.res" -n 24 -k 3 -g 8
   RUSER=fk KEY="$KEY" EVERY=10 STALL=90 MAXFAIL=3 timeout $(( REM - 20 )) tools/harvest.sh "$IP" 22 /home/fk/fk/res.txt /home/fk/fk/run.log "$OUT/h.res"
