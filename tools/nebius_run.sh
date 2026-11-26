@@ -19,6 +19,9 @@ START_WAIT=${START_WAIT:-900}
 EVERY=${EVERY:-60}
 GUARD_STALL=${GUARD_STALL:-3000}
 MAX_RESTARTS=${MAX_RESTARTS:-20}
+MAX_ERRORS=${MAX_ERRORS:-2}
+NOPROG=${NOPROG:-2400}
+ALIVE=${ALIVE:-1200}
 KEY=${KEY:-$HOME/.ssh/nebius_fk}
 RDIR=/home/fk/fk
 SSHO=(-i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ServerAliveInterval=20 -o LogLevel=ERROR)
@@ -57,7 +60,7 @@ delete_vm() {
 }
 create_vm() {
   local UD extra=()
-  UD=$(printf '#cloud-config\nusers:\n  - name: fk\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - %s\n' "$(cat "$KEY.pub")")
+  UD=$(printf '#cloud-config\nusers:\n  - name: fk\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - %s\nruncmd:\n  - shutdown -h +45\n' "$(cat "$KEY.pub")")
   [ -n "$PP" ] && extra=(--recovery-policy fail --preemptible-on-preemption stop --spot-pricing-policy-id "$PP")
   log "create $NAME"
   timeout 900 nebius compute instance create --parent-id "$P" --name "$NAME" \
@@ -82,9 +85,10 @@ cd $RDIR
 while sleep 60; do
   grep -q '^# check' res.txt 2>/dev/null && { sleep 600; sudo shutdown -h now; }
   [ -f res.txt ] && [ \$(( \$(date +%s) - \$(stat -c %Y res.txt) )) -gt $GUARD_STALL ] && sudo shutdown -h now
+  [ -f alive ] && [ \$(( \$(date +%s) - \$(stat -c %Y alive) )) -gt $ALIVE ] && sudo shutdown -h now
 done
 G
-chmod +x $RDIR/guard.sh; cd $RDIR; if ! { [ -f guard.pid ] && kill -0 \$(cat guard.pid) 2>/dev/null; }; then setsid nohup ./guard.sh > /dev/null 2>&1 < /dev/null & echo \$! > guard.pid; fi" || return 1
+chmod +x $RDIR/guard.sh; cd $RDIR; touch alive; if ! { [ -f guard.pid ] && grep -q guard.sh /proc/\$(cat guard.pid)/cmdline 2>/dev/null; }; then sudo shutdown -c 2>/dev/null; [ -f res.txt ] && touch res.txt; setsid nohup ./guard.sh > /dev/null 2>&1 < /dev/null & echo \$! > guard.pid; fi" || return 1
   return 0
 }
 job_state() { T=60 rsh "if pgrep -x $(basename "$BIN") > /dev/null; then echo yes; else echo no; fi" 2>/dev/null; }
@@ -92,6 +96,10 @@ harvest() { RUSER=fk KEY="$KEY" ONCE=1 tools/harvest.sh "$IP" 22 "$RDIR/res.txt"
 done_local() { grep -q '^# check' "$LRES" 2>/dev/null; }
 trap 'log "interrupted"; delete_vm; exit 130' INT TERM
 restarts=0
+errors=0
+up_since=0
+prog_n=$(grep -c '^residue ' "$LRES" 2>/dev/null)
+prog_t=0
 last_tick=$(date +%s)
 running=0
 touch "$LRES"
@@ -122,10 +130,19 @@ while true; do
   case "$ST" in
     RUNNING)
       running=1
+      if [ "$up_since" = 0 ]; then up_since=$(date +%s); prog_t=$up_since; fi
+      n_now=$(grep -c '^residue ' "$LRES" 2>/dev/null)
+      if [ "$n_now" -gt "$prog_n" ]; then prog_n=$n_now; prog_t=$(date +%s); fi
+      if [ $(( $(date +%s) - prog_t )) -gt "$NOPROG" ]; then
+        log "no new residue for over ${NOPROG}s, stopping"
+        delete_vm
+        exit 6
+      fi
       if [ "$IP" = "-" ]; then sleep 10; continue; fi
       ;;
     STOPPED)
       running=0
+      up_since=0
       if [ $(( $(date +%s) - ${begin:-0} )) -lt 180 ]; then
         sleep 15
         continue
@@ -144,6 +161,7 @@ while true; do
       ;;
     *)
       running=1
+      up_since=0
       if [ $(( $(date +%s) - ${begin:-$now} )) -gt "$START_WAIT" ]; then
         log "state $ST for over ${START_WAIT}s, deleting to retry later"
         delete_vm
@@ -165,6 +183,12 @@ while true; do
   rc=$?
   [ -n "$out" ] && echo "$out" | while read -r l; do log "$l"; done
   if [ "$rc" = 4 ]; then
+    errors=$((errors + 1))
+    if [ "$errors" -ge "$MAX_ERRORS" ]; then
+      log "job error $errors times, stopping"
+      delete_vm
+      exit 5
+    fi
     log "job error, restarting job"
     T=60 rsh "pkill -x $(basename "$BIN"); sleep 2; mv $RDIR/run.log $RDIR/run.log.err.\$(date +%s)" 2>/dev/null
   fi
