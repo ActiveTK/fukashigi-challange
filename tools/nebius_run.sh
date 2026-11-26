@@ -98,7 +98,8 @@ trap 'log "interrupted"; delete_vm; exit 130' INT TERM
 restarts=0
 errors=0
 up_since=0
-prog_n=$(grep -c '^residue ' "$LRES" 2>/dev/null)
+touch "$LRES"
+prog_n=$(grep -c '^residue ' "$LRES")
 prog_t=0
 last_tick=$(date +%s)
 running=0
