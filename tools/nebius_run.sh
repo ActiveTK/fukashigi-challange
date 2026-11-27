@@ -182,7 +182,7 @@ while true; do
       continue
       ;;
     *)
-      running=1
+      running=0
       up_since=0
       [ "$pend_since" = 0 ] && pend_since=$(date +%s)
       if [ $(( $(date +%s) - pend_since )) -gt "$START_WAIT" ]; then
